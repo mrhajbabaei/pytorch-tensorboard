@@ -88,7 +88,7 @@ def test(model, test_loader, device, epoch, summary_writer):
             if i == 0:
                 n = min(data.size(0), 8)
                 comparison = torch.cat([data[:n], recon_batch.view(args.batch_size, 1, 28, 28)[:n]])
-                save_image(comparison.cpu(), os.path.join(results_dir, 'reconstruction_' + str(epoch) + '.png', nrow=n))
+                save_image(comparison.cpu(), os.path.join(results_dir, 'reconstruction_' + str(epoch) + '.png'), nrow=n)
 
     test_loss /= len(test_loader.dataset)
     print('====> Test set loss: {:.4f}'.format(test_loss))

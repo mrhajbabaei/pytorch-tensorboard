@@ -11,6 +11,10 @@
 */cmake_install.cmake
 .DS_Store
 
+#tensorboard
+/log
+/results
+
 ### Python ###
 # Byte-compiled / optimized / DLL files
 __pycache__/

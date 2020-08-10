@@ -6,15 +6,19 @@ import argparse
 import torch.utils.data
 from torch import nn, optim
 from torch.nn import functional as F
-from torchvision.utils import save_image, make_grid
 from torchvision import datasets, transforms
-from torch.utils.tensorboard import SummaryWriter   # --import tensorboard 
+from torch.utils.tensorboard import SummaryWriter   # -- import tensorboard 
+from torchvision.utils import save_image, make_grid
 
+latent_layer_output = None
+
+def latent_layer_hook(model, input_, output):
+    global latent_layer_output
+    latent_layer_output = output
 
 class VAE(nn.Module):
     def __init__(self):
         super(VAE, self).__init__()
-
         self.fc1 = nn.Linear(784, 400)
         self.fc21 = nn.Linear(400, 20)
         self.fc22 = nn.Linear(400, 20)
@@ -40,7 +44,6 @@ class VAE(nn.Module):
         return self.decode(z), mu, logvar
 
 
-
 # Reconstruction + KL divergence losses summed over all elements and batch
 def loss_function(recon_x, x, mu, logvar):
     BCE = F.binary_cross_entropy(recon_x, x.view(-1, 784), reduction='sum')
@@ -57,11 +60,16 @@ def loss_function(recon_x, x, mu, logvar):
 def train(model, train_loader, device, optimizer, epoch, summary_writer):
     model.train()
     train_loss = 0
+    first_data_batch = None
     for batch_idx, (data, _) in enumerate(train_loader):
         data = data.to(device)
-        # --add image grid to summay writer
-        image_grid = make_grid(data)
-        summary_writer.add_image('mnist_images', image_grid)
+        # -- add image grid to summay writer, execute just one time
+        if batch_idx == 0:
+            first_data_batch = data
+            image_grid = make_grid(first_data_batch)
+            summary_writer.add_image('mnist_images', image_grid)
+            summary_writer.add_graph(model, first_data_batch)
+        # -- 
         optimizer.zero_grad()
         recon_batch, mu, logvar = model(data)
         loss = loss_function(recon_batch, data, mu, logvar)
@@ -75,6 +83,7 @@ def train(model, train_loader, device, optimizer, epoch, summary_writer):
                 loss.item() / len(data)))
 
     print('====> Epoch: {} Average loss: {:.4f}'.format(epoch, train_loss / len(train_loader.dataset)))
+    return first_data_batch
 
 
 def test(model, test_loader, device, epoch, summary_writer):
@@ -83,6 +92,12 @@ def test(model, test_loader, device, epoch, summary_writer):
     with torch.no_grad():
         for i, (data, _) in enumerate(test_loader):
             data = data.to(device)
+            # -- add embedding layer (latent layer) to summary writer
+            if i == 0:
+                mu, logvar = model.encode(data.view(-1, 784))
+                z = model.reparameterize(mu, logvar)
+                summary_writer.add_embedding(z, global_step=epoch+1, tag='latent_layer')
+            # -- 
             recon_batch, mu, logvar = model(data)
             test_loss += loss_function(recon_batch, data, mu, logvar).item()
             if i == 0:
@@ -96,40 +111,31 @@ def test(model, test_loader, device, epoch, summary_writer):
 
 def main(args):
     args.cuda = not args.no_cuda and torch.cuda.is_available()
-    
     for dir in [args.results_dir, log_dir]:
         if os.path.isdir(dir):
             shutil.rmtree(dir)
-        
         os.makedirs(dir)
-
-    # --create SummaryWriter
-    writer = SummaryWriter(os.path.join(log_dir, 'vae_experiment'))
-
 
     torch.manual_seed(args.seed)
     device = torch.device("cuda" if args.cuda else "cpu")
     kwargs = {'num_workers': 1, 'pin_memory': True} if args.cuda else {}
     train_loader = torch.utils.data.DataLoader(
-        datasets.MNIST('../data', train=True, download=True,
-                    transform=transforms.ToTensor()),
+        datasets.MNIST('../data', train=True, download=True, transform=transforms.ToTensor()), 
         batch_size=args.batch_size, shuffle=True, **kwargs)
     test_loader = torch.utils.data.DataLoader(
-        datasets.MNIST('../data', train=False, transform=transforms.ToTensor()),
+        datasets.MNIST('../data', train=False, transform=transforms.ToTensor()), 
         batch_size=args.batch_size, shuffle=True, **kwargs)
 
     model = VAE().to(device)
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
-
-    for epoch in range(1, args.epochs + 1):
-        train(model, train_loader, device, optimizer, epoch, writer)
-        test(model, test_loader, device, epoch, writer)
-        with torch.no_grad():
-            sample = torch.randn(64, 20).to(device)
-            sample = model.decode(sample).cpu()
-            save_image(sample.view(64, 1, 28, 28), 'results/sample_' + str(epoch) + '.png')
-
-
+    with SummaryWriter(os.path.join(log_dir, 'vae_experiment')) as summary_writer:  # -- create SummaryWriter, no need to writer.close() anymore.
+        for epoch in range(1, args.epochs + 1):
+            train(model, train_loader, device, optimizer, epoch, summary_writer)
+            test(model, test_loader, device, epoch, summary_writer)
+            with torch.no_grad():
+                sample = torch.randn(64, 20).to(device)
+                sample = model.decode(sample).cpu()
+                save_image(sample.view(64, 1, 28, 28), os.path.join(results_dir, 'sample_' + str(epoch) + '.png'))
 
 
 if __name__ == "__main__":
